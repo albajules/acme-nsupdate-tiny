@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # coding: utf-8
-import argparse, base64, binascii, hashlib, json, logging, re, subprocess, sys
+import argparse, base64, binascii, hashlib, json, logging, re, subprocess, sys, time
 try:
     from urllib.request import Request, urlopen # Python 3
 except ImportError:
@@ -10,7 +10,8 @@ def _b64(s):
 def _cmd(args, data=None):
     p = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     out, err = p.communicate(data)
-    assert p.returncode == 0, "Cmd: {}\nRet: {}\nError:\n{}".format(" ".join(args), p.returncode, err.decode("utf-8"))
+    if p.returncode != 0:
+        raise Exception("Cmd: {}\nRet: {}\nError:\n{}".format(" ".join(args), p.returncode, err.decode("utf-8")))
     return out
 def _nsupdate(cmd, key):
     _cmd(["nsupdate"], (("" if key is None else "key " + key + "\n") + cmd + "\nsend").encode("utf-8"))
@@ -20,7 +21,8 @@ def _req(url, data=None):
     resp_data, code, headers = resp.read().decode("utf-8"), resp.getcode(), resp.info()
     resp.close()
     logging.info("Url: %s\nData:\n%s\nCode: %d\nHeaders:\n%s\nResponse:\n%s", url, data, code, headers, resp_data)
-    assert code in [200, 201, 204], "Url: {}\nData:\n{}\nCode: {}\nResponse:\n{}".format(url, data, code, resp_data)
+    if code not in [200, 201, 204]:
+        raise ValueError("Url: {}\nData:\n{}\nCode: {}\nResponse:\n{}".format(url, data, code, resp_data))
     return None if resp_data == "" else json.loads(resp_data), headers
 def _post(url, protected, key, payload=None):
     payload64 = "" if payload is None else _b64(json.dumps(payload).encode("utf-8"))
@@ -31,9 +33,14 @@ def _post(url, protected, key, payload=None):
     protected["nonce"] = headers["Replay-Nonce"]
     return resp, headers.get("Location")
 def _poll(url, obj, protected, key, status, err):
+    attempts = 0
     while obj["status"] != "valid":
+        if attempts >= 30: raise ValueError("Timeout polling for " + err)
+        time.sleep(2)
         obj.update(_post(url, protected, key)[0])
-        assert obj["status"] in status + ["valid"], "{} is {}".format(err, obj["status"])
+        if obj["status"] not in status + ["valid"]:
+            raise ValueError("{} is {}".format(err, obj["status"]))
+        attempts += 1
 def sign(keyfile, csrfile, directory_url, nskey=None, emails=None):
     key = _cmd(["openssl", "rsa", "-in", keyfile, "-noout", "-text"]).decode("utf-8")
     key = re.search(r"modulus:[\s]+?00:([a-f0-9\:\s]+?)\npublicExponent: ([0-9]+)", key, re.MULTILINE | re.DOTALL)
@@ -53,6 +60,8 @@ def sign(keyfile, csrfile, directory_url, nskey=None, emails=None):
     domains = set([] if subject is None else [subject.group(1)])
     sans = re.search(r"X509v3 Subject Alternative Name: (?:critical)?\n +([^\n]+)\n", csr, re.MULTILINE | re.DOTALL)
     domains.update(set([] if sans is None else [s[4:] for s in sans.group(1).split(", ") if s.startswith("DNS:")]))
+    for d in domains:
+        if not re.match(r"^[a-zA-Z0-9.*_-]+$", d): raise ValueError("Invalid domain name: " + d)
     order_payload = {"identifiers": [{"type": "dns", "value": d} for d in domains]}
     order, order_url = _post(directory["newOrder"], protected, keyfile, order_payload)
     for authz_url in order["authorizations"]:
