@@ -13,14 +13,25 @@ def _cmd(args, data=None):
     if p.returncode != 0:
         raise Exception("Cmd: {}\nRet: {}\nError:\n{}".format(" ".join(args), p.returncode, err.decode("utf-8")))
     return out
-def _nsupdate(cmd, key):
-    _cmd(["nsupdate"], (("" if key is None else "key " + key + "\n") + cmd + "\nsend").encode("utf-8"))
+def _cf(t, d, c, a):
+    h = {"Authorization": "Bearer " + t, "Content-Type": "application/json"}
+    def _r(u, d=None, m=None):
+        req = Request("https://api.cloudflare.com/client/v4"+u, json.dumps(d).encode("utf-8") if d else None, h)
+        if m: req.get_method = lambda: m
+        return json.loads(urlopen(req).read().decode("utf-8"))["result"]
+    p = d.split(".")
+    z = next((r[0]["id"] for i in range(len(p)-1) for r in [_r("/zones?name="+".".join(p[i:]))] if r), None)
+    if not z: raise ValueError("Zone not found for " + d)
+    n = "_acme-challenge." + d
+    if a == "add": _r("/zones/" + z + "/dns_records", {"type": "TXT", "name": n, "content": c, "ttl": 120})
+    else:
+        for r in _r("/zones/"+z+"/dns_records?name="+n+"&content="+c):
+            _r("/zones/"+z+"/dns_records/"+r["id"], None, "DELETE")
 def _req(url, data=None):
-    headers = {"Content-Type": "application/jose+json", "User-Agent": "acme-nsupdate-tiny"}
-    resp = urlopen(Request(url, data=None if data is None else data.encode("utf-8"), headers=headers))
+    resp = urlopen(Request(url, data=None if data is None else data.encode("utf-8"),
+        headers={"Content-Type": "application/jose+json", "User-Agent": "acme-cloudflare-tiny"}))
     resp_data, code, headers = resp.read().decode("utf-8"), resp.getcode(), resp.info()
     resp.close()
-    logging.info("Url: %s\nData:\n%s\nCode: %d\nHeaders:\n%s\nResponse:\n%s", url, data, code, headers, resp_data)
     if code not in [200, 201, 204]:
         raise ValueError("Url: {}\nData:\n{}\nCode: {}\nResponse:\n{}".format(url, data, code, resp_data))
     return None if resp_data == "" else json.loads(resp_data), headers
@@ -38,10 +49,9 @@ def _poll(url, obj, protected, key, status, err):
         if attempts >= 30: raise ValueError("Timeout polling for " + err)
         time.sleep(2)
         obj.update(_post(url, protected, key)[0])
-        if obj["status"] not in status + ["valid"]:
-            raise ValueError("{} is {}".format(err, obj["status"]))
+        if obj["status"] not in status + ["valid"]: raise ValueError("{} is {}".format(err, obj["status"]))
         attempts += 1
-def sign(keyfile, csrfile, directory_url, nskey=None, emails=None):
+def sign(keyfile, csrfile, directory_url, cf_token, emails=None):
     key = _cmd(["openssl", "rsa", "-in", keyfile, "-noout", "-text"]).decode("utf-8")
     key = re.search(r"modulus:[\s]+?00:([a-f0-9\:\s]+?)\npublicExponent: ([0-9]+)", key, re.MULTILINE | re.DOTALL)
     keye = "{0:x}".format(int(key.group(2)))
@@ -53,8 +63,7 @@ def sign(keyfile, csrfile, directory_url, nskey=None, emails=None):
     jwk = hashlib.sha256(json.dumps(protected["jwk"], sort_keys=True, separators=(",", ":")).encode("utf-8")).digest()
     protected["kid"] = _post(directory["newAccount"], protected, keyfile, {"termsOfServiceAgreed": True})[1]
     del protected["jwk"]
-    if emails is not None:
-        _post(protected["kid"], protected, keyfile, {"contact": ["mailto:" + m for m in emails]})
+    if emails is not None: _post(protected["kid"], protected, keyfile, {"contact": ["mailto:" + m for m in emails]})
     csr = _cmd(["openssl", "req", "-in", csrfile, "-noout", "-text"]).decode("utf-8")
     subject = re.search(r"Subject:.*? CN\s?=\s?([^\s,;/]+)", csr)
     domains = set([] if subject is None else [subject.group(1)])
@@ -68,24 +77,23 @@ def sign(keyfile, csrfile, directory_url, nskey=None, emails=None):
         authz = _post(authz_url, protected, keyfile)[0]
         chall = [c for c in authz["challenges"] if c["type"] == "dns-01"][0]
         record = _b64(hashlib.sha256((chall["token"] + "." + _b64(jwk)).encode("utf-8")).digest())
-        _nsupdate("add _acme-challenge." + authz["identifier"]["value"] + ". 1 txt \"" + record + "\"", nskey)
+        _cf(cf_token, authz["identifier"]["value"], record, "add")
         _post(chall["url"], protected, keyfile, {})
         _poll(authz_url, authz, protected, keyfile, ["pending"], "Challenge for " + authz["identifier"]["value"])
-        _nsupdate("del _acme-challenge." + authz["identifier"]["value"] + ". txt", nskey)
+        _cf(cf_token, authz["identifier"]["value"], record, "del")
     csr = _cmd(["openssl", "req", "-in", csrfile, "-outform", "DER"])
     _post(order["finalize"], protected, keyfile, {"csr": _b64(csr)})
     _poll(order_url, order, protected, keyfile, ["pending", "processing"], "Order")
     return order["certificate"]
 if __name__ == "__main__":
-    PRODUCTION = "https://acme-v02.api.letsencrypt.org/directory"
-    STAGING = "https://acme-staging-v02.api.letsencrypt.org/directory"
     parser = argparse.ArgumentParser()
     parser.add_argument("--account-key", required=True, help="path to your Let's Encrypt account private key")
     parser.add_argument("--csr", required=True, help="path to your certificate signing request")
-    parser.add_argument("--tsig-key", default=None, help="nsupdate TSIG key, e.g. \"hmac-sha256:keyname secret\"")
+    parser.add_argument("--cf-token", required=True, help="Cloudflare API Token")
     parser.add_argument("--email", default=None, nargs="*", help="emails (e.g. user@example.com) for your account-key")
     parser.add_argument("--production", default=False, action="store_true", help="use production server")
     parser.add_argument("--verbose", default=False, action="store_true", help="show debug info")
     args = parser.parse_args(sys.argv[1:])
     logging.basicConfig(level=logging.INFO if args.verbose else logging.WARNING)
-    print(sign(args.account_key, args.csr, PRODUCTION if args.production else STAGING, args.tsig_key, args.email))
+    print(sign(args.account_key, args.csr, "https://acme-v02.api.letsencrypt.org/directory"
+        if args.production else "https://acme-staging-v02.api.letsencrypt.org/directory", args.cf_token, args.email))
