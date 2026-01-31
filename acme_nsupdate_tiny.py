@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # coding: utf-8
-import argparse, base64, binascii, hashlib, json, logging, re, subprocess, sys, time
+import argparse, base64, binascii, hashlib, json, logging, os, re, subprocess, sys, time
 try:
     from urllib.request import Request, urlopen # Python 3
 except ImportError:
@@ -88,4 +88,6 @@ if __name__ == "__main__":
     parser.add_argument("--verbose", default=False, action="store_true", help="show debug info")
     args = parser.parse_args(sys.argv[1:])
     logging.basicConfig(level=logging.INFO if args.verbose else logging.WARNING)
+    if args.tsig_key and os.path.isfile(args.tsig_key):
+        with open(args.tsig_key) as f: args.tsig_key = f.read().strip()
     print(sign(args.account_key, args.csr, PRODUCTION if args.production else STAGING, args.tsig_key, args.email))
