@@ -14,10 +14,11 @@ def _cmd(args, data=None):
         raise Exception("Cmd: {}\nRet: {}\nError:\n{}".format(" ".join(args), p.returncode, err.decode("utf-8")))
     return out
 def _nsupdate(cmd, key):
+    if key and re.search(r"[\r\n]", key): raise ValueError("Invalid TSIG key: newlines not allowed")
     _cmd(["nsupdate"], (("" if key is None else "key " + key + "\n") + cmd + "\nsend").encode("utf-8"))
 def _req(url, data=None):
     headers = {"Content-Type": "application/jose+json", "User-Agent": "acme-nsupdate-tiny"}
-    resp = urlopen(Request(url, data=None if data is None else data.encode("utf-8"), headers=headers))
+    resp = urlopen(Request(url, data=None if data is None else data.encode("utf-8"), headers=headers), timeout=10)
     resp_data, code, headers = resp.read().decode("utf-8"), resp.getcode(), resp.info()
     resp.close()
     logging.info("Url: %s\nData:\n%s\nCode: %d\nHeaders:\n%s\nResponse:\n%s", url, data, code, headers, resp_data)
