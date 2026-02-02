@@ -66,6 +66,8 @@ def sign(keyfile, csrfile, directory_url, nskey=None, emails=None):
     order, order_url = _post(directory["newOrder"], protected, keyfile, order_payload)
     for authz_url in order["authorizations"]:
         authz = _post(authz_url, protected, keyfile)[0]
+        if not re.match(r"^[a-zA-Z0-9.*_-]+$", authz["identifier"]["value"]):
+            raise ValueError("Invalid domain name: " + authz["identifier"]["value"])
         chall = [c for c in authz["challenges"] if c["type"] == "dns-01"][0]
         record = _b64(hashlib.sha256((chall["token"] + "." + _b64(jwk)).encode("utf-8")).digest())
         _nsupdate("add _acme-challenge." + authz["identifier"]["value"] + ". 1 txt \"" + record + "\"", nskey)
