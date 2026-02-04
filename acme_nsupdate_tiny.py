@@ -14,6 +14,7 @@ def _cmd(args, data=None):
         raise Exception("Cmd: {}\nRet: {}\nError:\n{}".format(" ".join(args), p.returncode, err.decode("utf-8")))
     return out
 def _nsupdate(cmd, key):
+    if key and ("\n" in key or "\r" in key): raise ValueError("Invalid TSIG key")
     _cmd(["nsupdate"], (("" if key is None else "key " + key + "\n") + cmd + "\nsend").encode("utf-8"))
 def _req(url, data=None):
     headers = {"Content-Type": "application/jose+json", "User-Agent": "acme-nsupdate-tiny"}
