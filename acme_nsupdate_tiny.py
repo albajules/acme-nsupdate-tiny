@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # coding: utf-8
-import argparse, base64, binascii, hashlib, json, logging, re, subprocess, sys, time
+import argparse, base64, binascii, hashlib, json, logging, os, re, subprocess, sys, time
 try:
     from urllib.request import Request, urlopen # Python 3
 except ImportError:
@@ -76,9 +76,7 @@ def sign(keyfile, csrfile, directory_url, nskey=None, emails=None):
     _post(order["finalize"], protected, keyfile, {"csr": _b64(csr)})
     _poll(order_url, order, protected, keyfile, ["pending", "processing"], "Order")
     return order["certificate"]
-if __name__ == "__main__":
-    PRODUCTION = "https://acme-v02.api.letsencrypt.org/directory"
-    STAGING = "https://acme-staging-v02.api.letsencrypt.org/directory"
+def parse_args(argv):
     parser = argparse.ArgumentParser()
     parser.add_argument("--account-key", required=True, help="path to your Let's Encrypt account private key")
     parser.add_argument("--csr", required=True, help="path to your certificate signing request")
@@ -86,6 +84,15 @@ if __name__ == "__main__":
     parser.add_argument("--email", default=None, nargs="*", help="emails (e.g. user@example.com) for your account-key")
     parser.add_argument("--production", default=False, action="store_true", help="use production server")
     parser.add_argument("--verbose", default=False, action="store_true", help="show debug info")
-    args = parser.parse_args(sys.argv[1:])
+    args = parser.parse_args(argv)
+    if args.tsig_key and os.path.exists(args.tsig_key):
+        with open(args.tsig_key, "r") as f: args.tsig_key = f.read().strip()
+    if args.tsig_key and ("\n" in args.tsig_key or "\r" in args.tsig_key):
+        raise ValueError("TSIG key must not contain newlines")
+    return args
+if __name__ == "__main__":
+    PRODUCTION = "https://acme-v02.api.letsencrypt.org/directory"
+    STAGING = "https://acme-staging-v02.api.letsencrypt.org/directory"
+    args = parse_args(sys.argv[1:])
     logging.basicConfig(level=logging.INFO if args.verbose else logging.WARNING)
     print(sign(args.account_key, args.csr, PRODUCTION if args.production else STAGING, args.tsig_key, args.email))
