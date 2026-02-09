@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # coding: utf-8
-import argparse, base64, binascii, hashlib, json, logging, re, subprocess, sys, time
+import argparse, base64, binascii, hashlib, json, logging, re, subprocess, sys, time, os
 try:
     from urllib.request import Request, urlopen # Python 3
 except ImportError:
@@ -14,6 +14,7 @@ def _cmd(args, data=None):
         raise Exception("Cmd: {}\nRet: {}\nError:\n{}".format(" ".join(args), p.returncode, err.decode("utf-8")))
     return out
 def _nsupdate(cmd, key):
+    if key and "\n" in key: raise ValueError("TSIG key must not contain newlines")
     _cmd(["nsupdate"], (("" if key is None else "key " + key + "\n") + cmd + "\nsend").encode("utf-8"))
 def _req(url, data=None):
     headers = {"Content-Type": "application/jose+json", "User-Agent": "acme-nsupdate-tiny"}
@@ -76,9 +77,7 @@ def sign(keyfile, csrfile, directory_url, nskey=None, emails=None):
     _post(order["finalize"], protected, keyfile, {"csr": _b64(csr)})
     _poll(order_url, order, protected, keyfile, ["pending", "processing"], "Order")
     return order["certificate"]
-if __name__ == "__main__":
-    PRODUCTION = "https://acme-v02.api.letsencrypt.org/directory"
-    STAGING = "https://acme-staging-v02.api.letsencrypt.org/directory"
+def main(argv):
     parser = argparse.ArgumentParser()
     parser.add_argument("--account-key", required=True, help="path to your Let's Encrypt account private key")
     parser.add_argument("--csr", required=True, help="path to your certificate signing request")
@@ -86,6 +85,10 @@ if __name__ == "__main__":
     parser.add_argument("--email", default=None, nargs="*", help="emails (e.g. user@example.com) for your account-key")
     parser.add_argument("--production", default=False, action="store_true", help="use production server")
     parser.add_argument("--verbose", default=False, action="store_true", help="show debug info")
-    args = parser.parse_args(sys.argv[1:])
+    args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO if args.verbose else logging.WARNING)
-    print(sign(args.account_key, args.csr, PRODUCTION if args.production else STAGING, args.tsig_key, args.email))
+    if args.tsig_key and os.path.exists(args.tsig_key):
+        with open(args.tsig_key) as f: args.tsig_key = f.read().strip()
+    print(sign(args.account_key, args.csr, "https://acme-v02.api.letsencrypt.org/directory" if args.production else "https://acme-staging-v02.api.letsencrypt.org/directory", args.tsig_key, args.email))
+if __name__ == "__main__":
+    main(sys.argv[1:])
