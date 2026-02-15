@@ -108,8 +108,9 @@ Now that you have setup your server and generated all the needed files, run this
 script with the permissions needed to read your private account key and CSR.
 
 ```
-# Run the script
-python acme_nsupdate_tiny.py --account-key ./account.key --csr ./domain.csr --tsig-key "hmac-sha256:default SECRET"
+# Run the script (using a file for the TSIG key is recommended)
+# e.g. echo "hmac-sha256:default SECRET" > tsig.key && chmod 600 tsig.key
+python acme_nsupdate_tiny.py --account-key ./account.key --csr ./domain.csr --tsig-key ./tsig.key
 ```
 
 ### Step 5: Install the certificate
